@@ -22,6 +22,8 @@ cargo run your_file.glb
 Which will produce `your_file_optimized.glb`.
 
 ## Requirements
+ > note: this part is currently a lie, paths to these tools is hardcoded
+ 
 In addition to [Rust](https://rustup.rs/), you must have the following programs installed. Tell `squisher` where they are by setting the environment variables `ASTC_PATH` and `KTX2KTK2_PATH` respectively:
 
 - arm's [astc-encoder](https://github.com/ARM-software/astc-encoder)
