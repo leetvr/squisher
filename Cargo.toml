@@ -7,3 +7,6 @@ version = "0.1.0"
 
 [dependencies]
 gltf = {git = "https://github.com/Gutawer/gltf", features = ["KHR_materials_pbrSpecularGlossiness", "KHR_texture_basisu"], rev = "e137db3"}
+
+[dev-dependencies]
+ktx2 = "0.3"

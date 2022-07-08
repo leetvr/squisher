@@ -7,11 +7,7 @@ use std::{
     time::SystemTime,
 };
 
-use gltf::{
-    binary::Header,
-    json::{extensions::texture::TextureBasisu, extras::Void, image::MimeType, Index},
-    Document,
-};
+use gltf::json::{extensions::texture::TextureBasisu, image::MimeType, Index};
 
 fn main() {
     println!("Hello, world!");
@@ -241,7 +237,7 @@ fn compress_texture(texture: &gltf::Texture, input: &Input) -> Vec<u8> {
     // Right. Next, call astc encoder
     astc(input_path, &output_path);
 
-    // Right. Next, call ktx2ktx2
+    // Nice work. Now we need to take that ktx file and convert it to ktx2.
     ktx2ktx2(&output_path);
 
     // OK. Hopefully that worked.
@@ -255,8 +251,8 @@ fn compress_texture(texture: &gltf::Texture, input: &Input) -> Vec<u8> {
     std::fs::read(output_path).expect("Unable to read output file!")
 }
 
+// TODO: don't hardcode the path
 fn ktx2ktx2(output_path: &PathBuf) {
-    // Nice work. Now we need to take that ktx file and convert it to ktx2.
     let ktx2ktx2_path = r#"C:\Program Files\KTX-Software\bin\ktx2ktx2.exe"#;
     // This command produces no output when it works correctly.
     println!("Calling ktx2ktx2 at {}", ktx2ktx2_path);
@@ -266,6 +262,7 @@ fn ktx2ktx2(output_path: &PathBuf) {
         .expect("Error calling ktx2ktx2");
 }
 
+// TODO: don't hardcode the path
 fn astc(input_path: PathBuf, output_path: &PathBuf) {
     let astc_path =
         r#"C:\Users\kanem\Downloads\astcenc-3.7-windows-x64\astcenc\astcenc-sse4.1.exe"#;
@@ -301,14 +298,15 @@ fn open(path: &Path) -> Input {
         .unwrap_or_else(|e| panic!("Unable to open file {}: {}", path.display(), e));
     match path.extension().map(|s| s.to_str()).flatten() {
         Some("gltf") => {
-            let gltf = gltf::Gltf::from_reader(reader).expect("Unable to open gltf file!");
-            let blob = gltf
-                .blob
-                .expect("Sorry, only glTF files with embedded binaries are supported");
-            Input {
-                document: gltf.document,
-                blob,
-            }
+            todo!("gltf files are not currently supported, sorry!")
+            // let gltf = gltf::Gltf::from_reader(reader).expect("Unable to open gltf file!");
+            // let blob = gltf
+            //     .blob
+            //     .expect("Sorry, only glTF files with embedded binaries are supported");
+            // Input {
+            //     document: gltf.document,
+            //     blob,
+            // }
         }
         Some("glb") => {
             let glb = gltf::Glb::from_reader(reader).expect("Unable to open GLB file!");
@@ -344,5 +342,18 @@ mod tests {
     pub fn verify<P: AsRef<Path>>(p: P) {
         let path = p.as_ref();
         assert!(path.exists());
+        let input = open(path);
+        for image in input.document.images() {
+            match image.source() {
+                gltf::image::Source::View { view, .. } => {
+                    // Get the image, then make sure it was compressed correctly.
+                    let bytes = &input.blob[view.offset()..view.offset() + view.length()];
+                    let reader = ktx2::Reader::new(bytes).unwrap();
+                    let format = reader.header().format.unwrap();
+                    assert_eq!(format, ktx2::Format::ASTC_8x8_SRGB_BLOCK);
+                }
+                _ => unreachable!(),
+            }
+        }
     }
 }
