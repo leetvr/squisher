@@ -1,8 +1,9 @@
 [package]
+edition = "2021"
 name = "squisher"
 version = "0.1.0"
-edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+gltf = {git = "https://github.com/Gutawer/gltf", features = ["KHR_materials_pbrSpecularGlossiness", "KHR_texture_basisu"], rev = "e137db3"}
