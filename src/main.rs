@@ -10,7 +10,10 @@ use std::{
 use gltf::json::{extensions::texture::TextureBasisu, image::MimeType, Index};
 
 fn main() {
-    println!("Hello, world!");
+    let file_name = std::env::args()
+        .nth(1)
+        .expect("You must provide the filename you'd like to squish.");
+    squish(file_name)
 }
 
 struct Input {
@@ -18,15 +21,47 @@ struct Input {
     blob: Vec<u8>,
 }
 
+/// Which part of the glTF material model this texture is.
+enum TextureType {
+    BaseColor,
+    Normal,
+    MetallicRoughness,
+    Occlusion,
+    Emissive,
+}
+
+impl TextureType {
+    pub fn is_srgb(&self) -> bool {
+        match self {
+            TextureType::BaseColor | TextureType::Emissive => true,
+            _ => false,
+        }
+    }
+
+    pub fn swizzle(&self, command: &mut Command) {
+        match self {
+            TextureType::BaseColor | TextureType::Emissive => command.arg("-esw").arg("rgb1"),
+            TextureType::Normal => command.arg("-normal"),
+            // each call to `arg` returns the command again, so just do the same to keep the return types happy
+            _ => command,
+        };
+    }
+}
+
 pub fn squish<P: AsRef<Path>>(file_name: P) {
     let path = file_name.as_ref();
+    println!("Squishing {}..", path.to_str().unwrap(),);
     let input = open(path);
     let optimized_glb = optimize(input);
 
     let mut output_path = path.to_path_buf();
     let stem = output_path.file_stem().unwrap().to_str().unwrap();
-    output_path.set_file_name(format!("{}_optimized.glb", stem));
-    std::fs::write(output_path, &optimized_glb).unwrap();
+    output_path.set_file_name(format!("{}_squished.glb", stem));
+    std::fs::write(&output_path, &optimized_glb).unwrap();
+    println!(
+        "Squished file: {}! Enjoy: ✨",
+        output_path.to_str().unwrap()
+    )
 }
 
 fn optimize(input: Input) -> Vec<u8> {
@@ -39,7 +74,31 @@ fn optimize(input: Input) -> Vec<u8> {
         let pbr = material.pbr_metallic_roughness();
         if let Some(base_colour) = pbr.base_color_texture() {
             let texture = base_colour.texture();
-            let compressed = compress_texture(&texture, &input);
+            let compressed = compress_texture(&texture, &input, TextureType::BaseColor);
+            image_map.insert(texture.source().index(), compressed);
+        }
+
+        if let Some(metallic_roughness) = pbr.metallic_roughness_texture() {
+            let texture = metallic_roughness.texture();
+            let compressed = compress_texture(&texture, &input, TextureType::MetallicRoughness);
+            image_map.insert(texture.source().index(), compressed);
+        }
+
+        if let Some(normal) = material.normal_texture() {
+            let texture = normal.texture();
+            let compressed = compress_texture(&texture, &input, TextureType::Normal);
+            image_map.insert(texture.source().index(), compressed);
+        }
+
+        if let Some(emissive) = material.emissive_texture() {
+            let texture = emissive.texture();
+            let compressed = compress_texture(&texture, &input, TextureType::Emissive);
+            image_map.insert(texture.source().index(), compressed);
+        }
+
+        if let Some(occlusion) = material.occlusion_texture() {
+            let texture = occlusion.texture();
+            let compressed = compress_texture(&texture, &input, TextureType::Occlusion);
             image_map.insert(texture.source().index(), compressed);
         }
     }
@@ -85,7 +144,6 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
         let mut new_view = view.clone();
         new_view.byte_offset = Some(new_offset as _);
         new_view.byte_length = bytes.len() as _;
-        println!("Created buffer view: old: {:?}, new: {:?}", view, new_view);
         new_buffer_views.push(new_view);
     }
 
@@ -201,7 +259,7 @@ fn to_padded_byte_vector<T>(vec: Vec<T>) -> Vec<u8> {
     new_vec
 }
 
-fn compress_texture(texture: &gltf::Texture, input: &Input) -> Vec<u8> {
+fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: TextureType) -> Vec<u8> {
     // Okay. First thing we need to do is get the path of the texture. If the source is *inside* the GLB, we'll have to write it to disk first.
     let input_path = match texture.source().source() {
         gltf::image::Source::View { view, mime_type } => {
@@ -235,17 +293,13 @@ fn compress_texture(texture: &gltf::Texture, input: &Input) -> Vec<u8> {
     output_path.set_extension("ktx");
 
     // Right. Next, call astc encoder
-    astc(input_path, &output_path);
+    astc(input_path, &output_path, texture_type);
 
     // Nice work. Now we need to take that ktx file and convert it to ktx2.
     ktx2ktx2(&output_path);
 
     // OK. Hopefully that worked.
     output_path.set_extension("ktx2");
-    println!(
-        "Created temporary ktx2 file: {}",
-        output_path.to_str().unwrap()
-    );
 
     // Now slurp up the image:
     std::fs::read(output_path).expect("Unable to read output file!")
@@ -255,7 +309,6 @@ fn compress_texture(texture: &gltf::Texture, input: &Input) -> Vec<u8> {
 fn ktx2ktx2(output_path: &PathBuf) {
     let ktx2ktx2_path = r#"C:\Program Files\KTX-Software\bin\ktx2ktx2.exe"#;
     // This command produces no output when it works correctly.
-    println!("Calling ktx2ktx2 at {}", ktx2ktx2_path);
     let _output = Command::new(ktx2ktx2_path)
         .arg(output_path)
         .output()
@@ -263,16 +316,29 @@ fn ktx2ktx2(output_path: &PathBuf) {
 }
 
 // TODO: don't hardcode the path
-fn astc(input_path: PathBuf, output_path: &PathBuf) {
-    let astc_path =
-        r#"C:\Users\kanem\Downloads\astcenc-3.7-windows-x64\astcenc\astcenc-sse4.1.exe"#;
+fn astc(input_path: PathBuf, output_path: &PathBuf, texture_type: TextureType) {
+    let astc_path = r#"C:\Users\kanem\Downloads\astcenc-3.7-windows-x64\astcenc\astcenc-avx2.exe"#;
     let mut astc_command = Command::new(astc_path);
-    astc_command
-        .arg("-cs")
-        .arg(input_path)
-        .arg(output_path)
-        .arg("8x8")
-        .arg("-thorough");
+
+    // Some textures need to be stored as linear data, some should be sRGB. atsc_enc lets us specify that.
+    if texture_type.is_srgb() {
+        astc_command.arg("-cs")
+    } else {
+        astc_command.arg("-cl")
+    };
+
+    // Specify the input and output paths.
+    astc_command.arg(input_path).arg(output_path);
+
+    // Specify the block size
+    astc_command.arg("8x8");
+
+    // Specify the quality
+    astc_command.arg("-thorough");
+
+    // Add any additional swizzle parameters, if required
+    texture_type.swizzle(&mut astc_command);
+
     // println!(
     //     "Calling astc with {:#?} {:#?}",
     //     astc_command.get_program(),
@@ -330,13 +396,13 @@ mod tests {
     pub fn test_that_it_works_with_gltf() {
         // TODO - make sure that we delete the output file first.
         squish("test_data/BoxTextured.gltf");
-        verify("test_data/BoxTextured_optimized.glb");
+        verify("test_data/BoxTextured_squished.glb");
     }
 
     #[test]
     pub fn test_that_it_works_with_glb() {
         squish("test_data/BoxTexturedBinary.glb");
-        verify("test_data/BoxTexturedBinary_optimized.glb");
+        verify("test_data/BoxTexturedBinary_squished.glb");
     }
 
     pub fn verify<P: AsRef<Path>>(p: P) {
