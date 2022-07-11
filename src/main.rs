@@ -38,12 +38,17 @@ impl TextureType {
         }
     }
 
-    pub fn swizzle(&self, command: &mut Command) {
+    /// Textures can be optimised based on their final usage. For example, occlusion textures contain
+    /// only a single channel of data, so we can tell our encoder to just include that one channel.
+    ///
+    /// We generally follow the guidelines ARM gives us:
+    /// https://github.com/ARM-software/astc-encoder/blob/main/Docs/Encoding.md
+    pub fn extra_args(&self, command: &mut Command) {
         match self {
-            TextureType::BaseColor | TextureType::Emissive => command.arg("-esw").arg("rgb1"),
             TextureType::Normal => command.arg("-normal"),
-            // each call to `arg` returns the command again, so just do the same to keep the return types happy
-            _ => command,
+            TextureType::BaseColor | TextureType::Emissive => command.arg("-esw").arg("rgb1"),
+            TextureType::MetallicRoughness => command.arg("-esw").arg("gggb"),
+            TextureType::Occlusion => command.arg("-esw").arg("rrr1"),
         };
     }
 }
@@ -336,8 +341,8 @@ fn astc(input_path: PathBuf, output_path: &PathBuf, texture_type: TextureType) {
     // Specify the quality
     astc_command.arg("-thorough");
 
-    // Add any additional swizzle parameters, if required
-    texture_type.swizzle(&mut astc_command);
+    // Add any additional arguments, if neccessary.
+    texture_type.extra_args(&mut astc_command);
 
     // println!(
     //     "Calling astc with {:#?} {:#?}",
