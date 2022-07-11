@@ -19,7 +19,7 @@ OR
 cargo run your_file.glb
 ````
 
-Which will produce `your_file_optimized.glb`.
+Which will produce `your_file_squished.glb`.
 
 ## Requirements
  > note: this part is currently a lie, paths to these tools is hardcoded
