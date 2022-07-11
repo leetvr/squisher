@@ -2,3 +2,8 @@
 
 # Ignore any glb files created in tests
 *.glb
+
+# Ignore any assets created during testing
+*.jpg
+*.bin
+*.gltf
