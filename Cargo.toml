@@ -6,7 +6,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-gltf = {git = "https://github.com/Gutawer/gltf", features = ["KHR_materials_pbrSpecularGlossiness", "KHR_texture_basisu"], rev = "e137db3"}
+gltf = "1.0"
 
 [dev-dependencies]
 ktx2 = "0.3"
