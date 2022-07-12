@@ -71,8 +71,9 @@ dependencies = [
 
 [[package]]
 name = "gltf"
-version = "0.16.0"
-source = "git+https://github.com/Gutawer/gltf?rev=e137db3#e137db300d104bf676d70dcace8339561db916d0"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00e0a0eace786193fc83644907097285396360e9e82e30f81a21e9b1ba836a3e"
 dependencies = [
  "base64",
  "byteorder",
@@ -83,8 +84,9 @@ dependencies = [
 
 [[package]]
 name = "gltf-derive"
-version = "0.16.0"
-source = "git+https://github.com/Gutawer/gltf?rev=e137db3#e137db300d104bf676d70dcace8339561db916d0"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd53d6e284bb2bf02a6926e4cc4984978c1990914d6cd9deae4e31cf37cd113"
 dependencies = [
  "inflections",
  "proc-macro2",
@@ -94,8 +96,9 @@ dependencies = [
 
 [[package]]
 name = "gltf-json"
-version = "0.16.0"
-source = "git+https://github.com/Gutawer/gltf?rev=e137db3#e137db300d104bf676d70dcace8339561db916d0"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9949836a9ec5e7f83f76fb9bbcbc77f254a577ebbdb0820867bc11979ef97cad"
 dependencies = [
  "gltf-derive",
  "serde",

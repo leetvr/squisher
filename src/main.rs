@@ -7,7 +7,7 @@ use std::{
     time::SystemTime,
 };
 
-use gltf::json::{extensions::texture::TextureBasisu, image::MimeType, Index};
+use gltf::json::{image::MimeType, Index};
 
 fn main() {
     let file_name = std::env::args()
@@ -152,24 +152,6 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
         new_buffer_views.push(new_view);
     }
 
-    // Next, we need to update the textures
-    for texture in new_root.textures.iter_mut() {
-        // Stash the original image index
-        let original_index = texture.source.unwrap();
-
-        // Now erase it
-        texture.source = None;
-
-        // Now set the extension - this is how we smuggle our ktx2 file into the glb (spooky laughter)
-        let basis_u = TextureBasisu {
-            source: original_index,
-        };
-        let extension = gltf::json::extensions::texture::Texture {
-            texture_basisu: Some(basis_u),
-        };
-        texture.extensions = Some(extension)
-    }
-
     // OK. Now we need to update any images that had their uri set (bufferView and uri are mutually exclusive)
     for (index, image) in new_root.images.iter_mut().enumerate() {
         // Set the MIME type
@@ -223,10 +205,6 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
         extensions: None,
         extras: Default::default(),
     }];
-
-    // Now declare that we're using the KHR_texture_basisu extension (albeit incorrectly)
-    new_root.extensions_required = vec!["KHR_texture_basisu".to_string()];
-    new_root.extensions_used = vec!["KHR_texture_basisu".to_string()];
 
     // and.. that's it? Maybe? Hopefully.
     // This part is mostly lifted from https://github.com/gltf-rs/gltf/blob/master/examples/export/main.rs
