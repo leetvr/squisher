@@ -9,6 +9,8 @@ use std::{
 
 use gltf::json::{image::MimeType, Index};
 
+const MAX_SIZE: u32 = 4096;
+
 fn main() {
     let file_name = std::env::args()
         .nth(1)
@@ -251,13 +253,33 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
             // Right. Bytes are BYTES.
             let bytes = &input.blob[view.offset()..view.offset() + view.length()];
             let mut path = tmp_file();
-            let extension = if mime_type == "image/jpeg" {
-                "jpg"
+            let (extension, format) = if mime_type == "image/jpeg" {
+                ("jpg", image::ImageFormat::Jpeg)
             } else {
-                "png"
+                ("png", image::ImageFormat::Png)
             };
+
+            // Now that we've got said bytes, let's resize the image.
+            let mut image = image::io::Reader::new(std::io::Cursor::new(bytes));
+            image.set_format(format);
+            let mut image = image.decode().unwrap();
+            if image.height() > MAX_SIZE {
+                println!(
+                    "[SQUISHER] Image is too large! ({}x{}), resizing to {}x{}",
+                    MAX_SIZE,
+                    MAX_SIZE,
+                    image.height(),
+                    image.width()
+                );
+                image = image.resize(MAX_SIZE, MAX_SIZE, image::imageops::Lanczos3);
+            }
+
             path.set_extension(extension);
-            std::fs::write(&path, bytes).unwrap();
+
+            image
+                .save_with_format(&path, format)
+                .unwrap_or_else(|e| panic!("Unable to write image to path {:?} - {:?}", path, e));
+
             path
         }
         gltf::image::Source::Uri { uri, .. } => {
@@ -330,7 +352,7 @@ fn astc(input_path: PathBuf, output_path: &PathBuf, texture_type: TextureType) {
     //     astc_command.get_args()
     // );
     let _output = astc_command.output().unwrap();
-    // println!("ASTC Output: {:#?}", output);
+    println!("ASTC Output: {:#?}", _output);
 }
 
 // Create a temporary file. There's probably a better way to do this.
