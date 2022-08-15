@@ -208,6 +208,8 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
 
     // and.. that's it? Maybe? Hopefully.
     // This part is mostly lifted from https://github.com/gltf-rs/gltf/blob/master/examples/export/main.rs
+
+    let new_blob = to_padded_byte_vector(new_blob);
     let buffer_length = new_blob.len() as u32;
     let json_string = gltf::json::serialize::to_string(&new_root).expect("Serialization error");
     let mut json_offset = json_string.len() as u32;
@@ -218,7 +220,7 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
             version: 2,
             length: json_offset + buffer_length,
         },
-        bin: Some(Cow::Owned(to_padded_byte_vector(new_blob))),
+        bin: Some(Cow::Owned(new_blob)),
         json: Cow::Owned(json_string.into_bytes()),
     };
 
