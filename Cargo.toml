@@ -6,7 +6,7 @@ version = "0.1.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-gltf = "1.0"
+gltf = {features = ["KHR_lights_punctual"], version = "1.0"}
 
 [dev-dependencies]
 ktx2 = "0.3"
