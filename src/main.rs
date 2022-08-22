@@ -10,6 +10,9 @@ use std::{
 use gltf::json::{image::MimeType, Index};
 
 const MAX_SIZE: u32 = 4096;
+static KTX2KTX2_PATH: &'static str = r#"C:\Program Files\KTX-Software\bin\ktx2ktx2.exe"#;
+static ASTC_PATH: &str =
+    r#"C:\Users\enaku\Downloads\astcenc-4.1.0-windows-x64\bin\astcenc-avx2.exe"#;
 
 fn main() {
     let file_name = std::env::args()
@@ -314,9 +317,8 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
 
 // TODO: don't hardcode the path
 fn ktx2ktx2(output_path: &PathBuf) {
-    let ktx2ktx2_path = r#"C:\Program Files\KTX-Software\bin\ktx2ktx2.exe"#;
     // This command produces no output when it works correctly.
-    let _output = Command::new(ktx2ktx2_path)
+    let _output = Command::new(KTX2KTX2_PATH)
         .arg(output_path)
         .output()
         .expect("Error calling ktx2ktx2");
@@ -324,8 +326,7 @@ fn ktx2ktx2(output_path: &PathBuf) {
 
 // TODO: don't hardcode the path
 fn astc(input_path: PathBuf, output_path: &PathBuf, texture_type: TextureType) {
-    let astc_path = r#"C:\Users\kanem\Downloads\astcenc-3.7-windows-x64\astcenc\astcenc-avx2.exe"#;
-    let mut astc_command = Command::new(astc_path);
+    let mut astc_command = Command::new(ASTC_PATH);
 
     // Some textures need to be stored as linear data, some should be sRGB. atsc_enc lets us specify that.
     if texture_type.is_srgb() {
