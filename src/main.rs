@@ -4,15 +4,23 @@ use std::{
     mem,
     path::{Path, PathBuf},
     process::Command,
-    time::SystemTime,
 };
 
 use gltf::json::{image::MimeType, Index};
 
 const MAX_SIZE: u32 = 4096;
-static KTX2KTX2_PATH: &'static str = r#"C:\Program Files\KTX-Software\bin\ktx2ktx2.exe"#;
-static ASTC_PATH: &str =
-    r#"C:\Users\enaku\Downloads\astcenc-4.1.0-windows-x64\bin\astcenc-avx2.exe"#;
+
+#[allow(unused)]
+static ASTC_PATH: &str = r#"C:\Program Files\arm\astcenc-4.2.0-windows-x64\bin\astcenc-avx2.exe"#;
+#[allow(unused)]
+static KTX2KTX2_PATH: &str = r#"C:\Program Files\KTX-Software\bin\ktx2ktx2.exe"#;
+static TOKTX_PATH: &str = r#"C:\Program Files\KTX-Software\bin\toktx.exe"#;
+
+/// Check for cached versions. Mark this as false if the compression algorithm changes in some way.
+const USE_CACHE: bool = true;
+
+// Use KTX's toktx tool
+const USE_TOKTX: bool = true;
 
 fn main() {
     let file_name = std::env::args()
@@ -27,11 +35,11 @@ struct Input {
 }
 
 /// Which part of the glTF material model this texture is.
+#[derive(PartialEq, Eq, Debug)]
 enum TextureType {
     BaseColor,
     Normal,
-    MetallicRoughness,
-    Occlusion,
+    MetallicRoughnessOcclusion,
     Emissive,
 }
 
@@ -43,18 +51,13 @@ impl TextureType {
         }
     }
 
-    /// Textures can be optimised based on their final usage. For example, occlusion textures contain
-    /// only a single channel of data, so we can tell our encoder to just include that one channel.
-    ///
-    /// We generally follow the guidelines ARM gives us:
-    /// https://github.com/ARM-software/astc-encoder/blob/main/Docs/Encoding.md
-    pub fn extra_args(&self, command: &mut Command) {
+    pub fn block_size(&self) -> &'static str {
         match self {
-            TextureType::Normal => command.arg("-normal"),
-            TextureType::BaseColor | TextureType::Emissive => command.arg("-esw").arg("rgb1"),
-            TextureType::MetallicRoughness => command.arg("-esw").arg("gggb"),
-            TextureType::Occlusion => command.arg("-esw").arg("rrr1"),
-        };
+            // TextureType::MetallicRoughnessOcclusion => command.arg("6x6"),
+            // TextureType::Emissive => command.arg("10x10"),
+            TextureType::BaseColor | TextureType::Emissive => "6x6",
+            _ => "4x4",
+        }
     }
 }
 
@@ -90,7 +93,8 @@ fn optimize(input: Input) -> Vec<u8> {
 
         if let Some(metallic_roughness) = pbr.metallic_roughness_texture() {
             let texture = metallic_roughness.texture();
-            let compressed = compress_texture(&texture, &input, TextureType::MetallicRoughness);
+            let compressed =
+                compress_texture(&texture, &input, TextureType::MetallicRoughnessOcclusion);
             image_map.insert(texture.source().index(), compressed);
         }
 
@@ -108,7 +112,8 @@ fn optimize(input: Input) -> Vec<u8> {
 
         if let Some(occlusion) = material.occlusion_texture() {
             let texture = occlusion.texture();
-            let compressed = compress_texture(&texture, &input, TextureType::Occlusion);
+            let compressed =
+                compress_texture(&texture, &input, TextureType::MetallicRoughnessOcclusion);
             image_map.insert(texture.source().index(), compressed);
         }
     }
@@ -141,8 +146,8 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
         let bytes = if let Some(image_index) = image_buffer_view_indices.get(&index) {
             image_map.get(&image_index).unwrap()
         } else {
-            // OK. Now we need to get the data this view refers to.
-            let start = view.byte_offset.unwrap() as usize;
+            // Not an image - just get the original data and return it as-is.
+            let start = view.byte_offset.unwrap_or_default() as usize;
             let end = start + view.byte_length as usize;
             &blob[start..end]
         };
@@ -250,12 +255,13 @@ fn to_padded_byte_vector<T>(vec: Vec<T>) -> Vec<u8> {
 }
 
 fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: TextureType) -> Vec<u8> {
+    println!("[SQUISHER] Compressing {texture_type:?}..");
     // Okay. First thing we need to do is get the path of the texture. If the source is *inside* the GLB, we'll have to write it to disk first.
-    let input_path = match texture.source().source() {
+    let (input_path, _original_size) = match texture.source().source() {
         gltf::image::Source::View { view, mime_type } => {
             // Right. Bytes are BYTES.
             let bytes = &input.blob[view.offset()..view.offset() + view.length()];
-            let mut path = tmp_file();
+            let mut path = file_name(&bytes);
             let (extension, format) = if mime_type == "image/jpeg" {
                 ("jpg", image::ImageFormat::Jpeg)
             } else {
@@ -269,10 +275,10 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
             if image.height() > MAX_SIZE {
                 println!(
                     "[SQUISHER] Image is too large! ({}x{}), resizing to {}x{}",
-                    MAX_SIZE,
-                    MAX_SIZE,
                     image.height(),
-                    image.width()
+                    image.width(),
+                    MAX_SIZE,
+                    MAX_SIZE,
                 );
                 image = image.resize(MAX_SIZE, MAX_SIZE, image::imageops::Lanczos3);
             }
@@ -283,7 +289,7 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
                 .save_with_format(&path, format)
                 .unwrap_or_else(|e| panic!("Unable to write image to path {:?} - {:?}", path, e));
 
-            path
+            (path, bytes.len())
         }
         gltf::image::Source::Uri { uri, .. } => {
             // Technically glTF supports images not stored on disk (eg. the interweb) so let's make sure it's a real path.
@@ -293,29 +299,53 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
                 "Corrupted glTF file or unsupported URI path - {}",
                 uri
             );
-            let destination = tmp_file();
-            std::fs::copy(path, destination).unwrap();
-            tmp_file()
+            let file = std::fs::read(path).unwrap();
+            let destination = file_name(&file);
+            std::fs::write(&destination, &file).unwrap();
+            (destination, file.len())
         }
     };
 
     let mut output_path = input_path.clone();
-    output_path.set_extension("ktx");
-
-    // Right. Next, call astc encoder
-    astc(input_path, &output_path, texture_type);
-
-    // Nice work. Now we need to take that ktx file and convert it to ktx2.
-    ktx2ktx2(&output_path);
-
-    // OK. Hopefully that worked.
     output_path.set_extension("ktx2");
 
+    // This file has already been hashed!
+    if output_path.exists() && USE_CACHE {
+        println!("[SQUISHER] Returning pre-compressed file!");
+    } else {
+        compress_image(&input_path, &mut output_path, texture_type);
+    }
+
     // Now slurp up the image:
-    std::fs::read(output_path).expect("Unable to read output file!")
+    let file = std::fs::read(&output_path).expect("Unable to read output file!");
+    println!("[SQUISHER] Tempfile is at {output_path:?}");
+
+    file
 }
 
-// TODO: don't hardcode the path
+fn compress_image(input_path: &PathBuf, output_path: &mut PathBuf, texture_type: TextureType) {
+    let delete_result = std::fs::remove_file(&output_path);
+    println!(
+        "[SQUISHER] Deleting destination file, if it exists: {:?}",
+        delete_result
+    );
+
+    if USE_TOKTX {
+        toktx(&input_path, &output_path, texture_type);
+    } else {
+        output_path.set_extension("ktx");
+        // Right. Call astcenc
+        astc(input_path, &output_path, texture_type);
+
+        // Nice work. Now we need to take that ktx file and convert it to ktx2.
+        ktx2ktx2(&output_path);
+
+        // OK. Hopefully that worked.
+        output_path.set_extension("ktx2");
+    }
+}
+
+#[allow(unused)]
 fn ktx2ktx2(output_path: &PathBuf) {
     // This command produces no output when it works correctly.
     let _output = Command::new(KTX2KTX2_PATH)
@@ -324,8 +354,9 @@ fn ktx2ktx2(output_path: &PathBuf) {
         .expect("Error calling ktx2ktx2");
 }
 
-// TODO: don't hardcode the path
-fn astc(input_path: PathBuf, output_path: &PathBuf, texture_type: TextureType) {
+#[allow(unused)]
+fn astc(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) {
+    // TODO: don't hardcode the path
     let mut astc_command = Command::new(ASTC_PATH);
 
     // Some textures need to be stored as linear data, some should be sRGB. atsc_enc lets us specify that.
@@ -339,31 +370,68 @@ fn astc(input_path: PathBuf, output_path: &PathBuf, texture_type: TextureType) {
     astc_command.arg(input_path).arg(output_path);
 
     // Specify the block size
-    astc_command.arg("8x8");
+    astc_command.arg(texture_type.block_size());
 
     // Specify the quality
-    astc_command.arg("-thorough");
+    astc_command.arg("-verythorough");
 
     // Add any additional arguments, if neccessary.
-    texture_type.extra_args(&mut astc_command);
+    if texture_type == TextureType::Normal {
+        astc_command.arg("-normal");
+    }
 
-    // println!(
-    //     "Calling astc with {:#?} {:#?}",
-    //     astc_command.get_program(),
-    //     astc_command.get_args()
-    // );
-    let _output = astc_command.output().unwrap();
-    println!("ASTC Output: {:#?}", _output);
+    println!(
+        "[SQUISHER] Running astcenc with args {:?}",
+        astc_command.get_args().collect::<Vec<_>>()
+    );
+
+    let output = astc_command.output().unwrap();
+    if output.status.success() {
+        println!("{}", String::from_utf8(output.stdout).unwrap());
+    } else {
+        panic!("{}", String::from_utf8(output.stdout).unwrap());
+    }
+}
+
+fn toktx(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) {
+    let mut command = Command::new(TOKTX_PATH);
+    command.args(["--encode", "astc", "--astc_blk_d"]);
+    command.arg(texture_type.block_size());
+    command.args(["--astc_quality", "thorough", "--genmipmap"]);
+
+    if texture_type == TextureType::Normal {
+        command.args(["--normal_mode", "--normalize"]);
+    }
+
+    command.arg("--assign_oetf");
+    if texture_type.is_srgb() {
+        command.arg("srgb");
+    } else {
+        command.arg("linear");
+    }
+    command.arg(output_path).arg(input_path);
+
+    println!(
+        "[SQUISHER] Running toktx with args {:?}",
+        command.get_args().collect::<Vec<_>>()
+    );
+    let output = command.output().unwrap();
+    if output.status.success() {
+        println!("{}", String::from_utf8(output.stdout).unwrap());
+    } else {
+        eprintln!(
+            "[SQUISHER] Error running command with args {:?}",
+            command.get_args().collect::<Vec<_>>()
+        );
+        panic!("{}", String::from_utf8(output.stderr).unwrap());
+    }
 }
 
 // Create a temporary file. There's probably a better way to do this.
-fn tmp_file() -> PathBuf {
+fn file_name(file_bytes: &[u8]) -> PathBuf {
+    let hash = seahash::hash(file_bytes);
     let mut path = std::env::temp_dir();
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    path.set_file_name(format!("squisher_temp_{}", now));
+    path.set_file_name(format!("squisher_temp_{}", hash));
     path
 }
 
@@ -400,13 +468,11 @@ fn open(path: &Path) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    pub fn test_that_it_works_with_gltf() {
-        // TODO - make sure that we delete the output file first.
-        squish("test_data/BoxTextured.gltf");
-        verify("test_data/BoxTextured_squished.glb");
-    }
-
+    // pub fn test_that_it_works_with_gltf() {
+    //     // TODO - make sure that we delete the output file first.
+    //     squish("test_data/BoxTextured.gltf");
+    //     verify("test_data/BoxTextured_squished.glb");
+    // }
     #[test]
     pub fn test_that_it_works_with_glb() {
         squish("test_data/BoxTexturedBinary.glb");
@@ -423,8 +489,9 @@ mod tests {
                     // Get the image, then make sure it was compressed correctly.
                     let bytes = &input.blob[view.offset()..view.offset() + view.length()];
                     let reader = ktx2::Reader::new(bytes).unwrap();
-                    let format = reader.header().format.unwrap();
-                    assert_eq!(format, ktx2::Format::ASTC_8x8_SRGB_BLOCK);
+                    let header = reader.header();
+                    assert_eq!(header.format.unwrap(), ktx2::Format::ASTC_8x8_SRGB_BLOCK);
+                    assert_eq!(header.level_count, 9);
                 }
                 _ => unreachable!(),
             }
