@@ -16,14 +16,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
-        include:
-          - label: Stable
-            rust_version: stable
-          - label: MSRV
-            rust_version: 1.67.1
+        rust_version: [stable, 1.67.1]
 
     runs-on: ${{ matrix.os }}
-    name: ${{ matrix.label }} (${{ matrix.os }})
+    name: ${{ matrix.os }} (${{ matrix.rust_version }})
 
     steps:
     - uses: actions/checkout@v3
