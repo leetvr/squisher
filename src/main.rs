@@ -10,11 +10,9 @@ use gltf::json::{image::MimeType, Index};
 
 const MAX_SIZE: u32 = 4096;
 
-#[allow(unused)]
-static ASTC_PATH: &str = r#"C:\Program Files\arm\astcenc-4.2.0-windows-x64\bin\astcenc-avx2.exe"#;
-#[allow(unused)]
-static KTX2KTX2_PATH: &str = r#"C:\Program Files\KTX-Software\bin\ktx2ktx2.exe"#;
-static TOKTX_PATH: &str = r#"C:\Program Files\KTX-Software\bin\toktx.exe"#;
+static BIN_ASTCENC: &str = "astcenc-avx2";
+static BIN_KTX2KTX2: &str = "ktx2ktx2";
+static BIN_TOKTX: &str = "toktx";
 
 /// Check for cached versions. Mark this as false if the compression algorithm changes in some way.
 const USE_CACHE: bool = true;
@@ -348,7 +346,7 @@ fn compress_image(input_path: &PathBuf, output_path: &mut PathBuf, texture_type:
 #[allow(unused)]
 fn ktx2ktx2(output_path: &PathBuf) {
     // This command produces no output when it works correctly.
-    let _output = Command::new(KTX2KTX2_PATH)
+    let _output = Command::new(BIN_KTX2KTX2)
         .arg(output_path)
         .output()
         .expect("Error calling ktx2ktx2");
@@ -357,7 +355,7 @@ fn ktx2ktx2(output_path: &PathBuf) {
 #[allow(unused)]
 fn astc(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) {
     // TODO: don't hardcode the path
-    let mut astc_command = Command::new(ASTC_PATH);
+    let mut astc_command = Command::new(BIN_ASTCENC);
 
     // Some textures need to be stored as linear data, some should be sRGB. atsc_enc lets us specify that.
     if texture_type.is_srgb() {
@@ -394,7 +392,7 @@ fn astc(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) 
 }
 
 fn toktx(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) {
-    let mut command = Command::new(TOKTX_PATH);
+    let mut command = Command::new(BIN_TOKTX);
     command.args(["--encode", "astc", "--astc_blk_d"]);
     command.arg(texture_type.block_size());
     command.args(["--astc_quality", "thorough", "--genmipmap"]);
@@ -490,7 +488,7 @@ mod tests {
                     let bytes = &input.blob[view.offset()..view.offset() + view.length()];
                     let reader = ktx2::Reader::new(bytes).unwrap();
                     let header = reader.header();
-                    assert_eq!(header.format.unwrap(), ktx2::Format::ASTC_8x8_SRGB_BLOCK);
+                    assert_eq!(header.format.unwrap(), ktx2::Format::ASTC_6x6_SRGB_BLOCK);
                     assert_eq!(header.level_count, 9);
                 }
                 _ => unreachable!(),
