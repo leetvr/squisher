@@ -1,7 +1,7 @@
 /target
 
-# Ignore any glb files created in tests
-*.glb
+# Ignore all outputs created in tests
+/test_output
 
 # Ignore any assets created during testing
 *.jpg
