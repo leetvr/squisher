@@ -30,20 +30,39 @@ struct Args {
 
     /// Where to output the squished output.
     output: PathBuf,
+
+    /// Enables more verbose logging.
+    #[clap(short, long)]
+    verbose: bool,
 }
 
 fn main() {
     let args = Args::parse();
 
     if let Err(err) = run(args) {
-        eprintln!("Fatal error: {err:?}");
+        log::error!("Fatal error: {err:?}");
         std::process::exit(1);
     }
 }
 
 fn run(args: Args) -> anyhow::Result<()> {
+    configure_logging(args.verbose);
     squish(&args.input, &args.output)?;
     Ok(())
+}
+
+fn configure_logging(verbose: bool) {
+    let filter = if verbose {
+        "squisher=debug,warn"
+    } else {
+        "squisher=info,warn"
+    };
+
+    let log_env = env_logger::Env::default().default_filter_or(filter);
+
+    env_logger::Builder::from_env(log_env)
+        .format_timestamp(None)
+        .init();
 }
 
 struct Input {
@@ -79,13 +98,13 @@ pub fn squish<P: AsRef<Path>>(input_path: P, output_path: P) -> anyhow::Result<(
     let input_path = input_path.as_ref();
     let output_path = output_path.as_ref();
 
-    println!("Squishing {}..", input_path.display());
+    log::info!("Squishing {}", input_path.display());
     let input = open(input_path)?;
     let optimized_glb = optimize(input)?;
 
     fs_err::write(output_path, optimized_glb)?;
 
-    println!("Squished file: {}! Enjoy: ✨", output_path.display());
+    log::info!("Squished file: {}! ✨ Enjoy ✨", output_path.display());
     Ok(())
 }
 
@@ -268,7 +287,7 @@ fn compress_texture(
     input: &Input,
     texture_type: TextureType,
 ) -> anyhow::Result<Vec<u8>> {
-    println!("[SQUISHER] Compressing {texture_type:?}..");
+    log::info!("Compressing {texture_type:?}...");
 
     // Okay. First thing we need to do is get the path of the texture. If the source is *inside* the GLB, we'll have to write it to disk first.
     let (input_path, _original_size) = match texture.source().source() {
@@ -289,8 +308,8 @@ fn compress_texture(
 
             // TODO: Configurable max size for images.
             if image.height() > MAX_SIZE {
-                println!(
-                    "[SQUISHER] Image is too large! ({}x{}), resizing to {}x{}",
+                log::warn!(
+                    "Image is too large! ({}x{}), resizing to {}x{}",
                     image.height(),
                     image.width(),
                     MAX_SIZE,
@@ -325,14 +344,14 @@ fn compress_texture(
 
     // This file has already been hashed!
     if output_path.exists() && USE_CACHE {
-        println!("[SQUISHER] Returning pre-compressed file!");
+        log::info!("Returning pre-compressed file!");
     } else {
         compress_image(&input_path, &mut output_path, texture_type)?;
     }
 
     // Now slurp up the image:
     let file = fs_err::read(&output_path)?;
-    println!("[SQUISHER] Tempfile is at {output_path:?}");
+    log::debug!("Tempfile is at {}", output_path.display());
 
     Ok(file)
 }
@@ -342,7 +361,8 @@ fn compress_image(
     output_path: &mut PathBuf,
     texture_type: TextureType,
 ) -> anyhow::Result<()> {
-    println!("[SQUISHER] Deleting destination file if it exists");
+    log::debug!("Deleting destination file if it exists");
+
     if let Err(err) = fs_err::remove_file(&output_path) {
         if err.kind() != io::ErrorKind::NotFound {
             let err = Error::new(err).context("failed to remove destination file");
@@ -369,6 +389,8 @@ fn compress_image(
 
 #[allow(unused)]
 fn ktx2ktx2(output_path: &Path) -> anyhow::Result<()> {
+    log::debug!("Running {BIN_KTX2KTX2} {}", output_path.display());
+
     // This command produces no output when it works correctly.
     let _output = Command::new(BIN_KTX2KTX2)
         .arg(output_path)
@@ -404,15 +426,13 @@ fn astc(input_path: &Path, output_path: &Path, texture_type: TextureType) -> any
         astc_command.arg("-normal");
     }
 
-    println!(
-        "[SQUISHER] Running astcenc with args {:?}",
+    log::debug!(
+        "Running {BIN_ASTCENC} with args {:?}",
         astc_command.get_args().collect::<Vec<_>>()
     );
 
     let output = astc_command.output().context("failed to run astcenc")?;
-    if output.status.success() {
-        println!("{}", String::from_utf8_lossy(&output.stdout));
-    } else {
+    if !output.status.success() {
         // TODO: Should this be stderr?
         bail!("{}", String::from_utf8_lossy(&output.stdout));
     }
@@ -438,16 +458,15 @@ fn toktx(input_path: &Path, output_path: &Path, texture_type: TextureType) -> an
     }
     command.arg(output_path).arg(input_path);
 
-    println!(
-        "[SQUISHER] Running toktx with args {:?}",
+    log::debug!(
+        "Running {BIN_TOKTX} with args {:?}",
         command.get_args().collect::<Vec<_>>()
     );
+
     let output = command.output().context("failed to run toktx")?;
-    if output.status.success() {
-        println!("{}", String::from_utf8_lossy(&output.stdout));
-    } else {
-        eprintln!(
-            "[SQUISHER] Error running command with args {:?}",
+    if !output.status.success() {
+        log::error!(
+            "Error running toktx with args {:?}",
             command.get_args().collect::<Vec<_>>()
         );
         bail!("{}", String::from_utf8_lossy(&output.stderr));
