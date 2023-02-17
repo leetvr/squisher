@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+    - master
+
+  pull_request:
+    branches:
+    - master
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        include:
+          - label: Stable
+            rust_version: stable
+          - label: MSRV
+            rust_version: 1.67.1
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.label }} (${{ matrix.os }})
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: ${{ matrix.rust_version }}
+        override: true
+        profile: minimal
+
+    - name: Build
+      run: cargo build --verbose ${{ matrix.flags }}
+
+    # TODO: Get tests building 
+    # - name: Run tests
+    #   run: cargo test --verbose ${{ matrix.flags }}
+
+  lint:
+    name: Rustfmt and Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+        components: rustfmt, clippy
+
+    - name: Rustfmt
+      run: cargo fmt -- --check
+
+    - name: Clippy
+      run: cargo clippy --all-features
