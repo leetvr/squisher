@@ -338,7 +338,7 @@ fn compress_texture(
 }
 
 fn compress_image(
-    input_path: &PathBuf,
+    input_path: &Path,
     output_path: &mut PathBuf,
     texture_type: TextureType,
 ) -> anyhow::Result<()> {
@@ -368,7 +368,7 @@ fn compress_image(
 }
 
 #[allow(unused)]
-fn ktx2ktx2(output_path: &PathBuf) -> anyhow::Result<()> {
+fn ktx2ktx2(output_path: &Path) -> anyhow::Result<()> {
     // This command produces no output when it works correctly.
     let _output = Command::new(BIN_KTX2KTX2)
         .arg(output_path)
@@ -379,11 +379,7 @@ fn ktx2ktx2(output_path: &PathBuf) -> anyhow::Result<()> {
 }
 
 #[allow(unused)]
-fn astc(
-    input_path: &PathBuf,
-    output_path: &PathBuf,
-    texture_type: TextureType,
-) -> anyhow::Result<()> {
+fn astc(input_path: &Path, output_path: &Path, texture_type: TextureType) -> anyhow::Result<()> {
     // TODO: don't hardcode the path
     let mut astc_command = Command::new(BIN_ASTCENC);
 
@@ -424,11 +420,7 @@ fn astc(
     Ok(())
 }
 
-fn toktx(
-    input_path: &PathBuf,
-    output_path: &PathBuf,
-    texture_type: TextureType,
-) -> anyhow::Result<()> {
+fn toktx(input_path: &Path, output_path: &Path, texture_type: TextureType) -> anyhow::Result<()> {
     let mut command = Command::new(BIN_TOKTX);
     command.args(["--encode", "astc", "--astc_blk_d"]);
     command.arg(texture_type.block_size());
