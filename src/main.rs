@@ -25,8 +25,8 @@ struct Args {
     /// Where to output the squished output.
     output: PathBuf,
 
-    /// What texture format to use. Can be 'raw' or 'astc'.
-    #[clap(long)]
+    /// What texture format to use. Can be 'astc' (default) or 'rgba8'.
+    #[clap(long, default_value = "astc")]
     format: TextureFormat,
 
     /// Enables more verbose logging.
@@ -49,7 +49,7 @@ impl FromStr for TextureFormat {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "raw" => Ok(Self::Rgba8),
+            "rgba8" => Ok(Self::Rgba8),
             "astc" => Ok(Self::Astc),
             _ => bail!("unknown texture format '{s}', expected 'rgba8' or 'astc'"),
         }
@@ -188,7 +188,10 @@ impl SquishContext {
         texture: &gltf::Texture,
         texture_type: TextureType,
     ) -> anyhow::Result<Vec<u8>> {
-        log::info!("Compressing {texture_type:?}...");
+        log::info!(
+            "Compressing {texture_type:?} as format {:?}...",
+            self.texture_format
+        );
 
         // Okay. First thing we need to do is get the path of the texture. If the source is *inside* the GLB, we'll have to write it to disk first.
         let (input_path, _original_size) = match texture.source().source() {
