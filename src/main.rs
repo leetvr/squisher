@@ -6,6 +6,7 @@ use std::{
     process::Command,
 };
 
+use clap::Parser;
 use gltf::json::{image::MimeType, Index};
 
 const MAX_SIZE: u32 = 4096;
@@ -20,11 +21,20 @@ const USE_CACHE: bool = true;
 // Use KTX's toktx tool
 const USE_TOKTX: bool = true;
 
+#[derive(Parser)]
+#[command(author, version, about)]
+struct Args {
+    /// The path to the file to process.
+    input: PathBuf,
+
+    /// Where to output the squished output.
+    output: PathBuf,
+}
+
 fn main() {
-    let file_name = std::env::args()
-        .nth(1)
-        .expect("You must provide the filename you'd like to squish.");
-    squish(file_name)
+    let args = Args::parse();
+
+    squish(&args.input, &args.output)
 }
 
 struct Input {
@@ -56,20 +66,17 @@ impl TextureType {
     }
 }
 
-pub fn squish<P: AsRef<Path>>(file_name: P) {
-    let path = file_name.as_ref();
-    println!("Squishing {}..", path.to_str().unwrap(),);
-    let input = open(path);
+pub fn squish<P: AsRef<Path>>(input_path: P, output_path: P) {
+    let input_path = input_path.as_ref();
+    let output_path = output_path.as_ref();
+
+    println!("Squishing {}..", input_path.display());
+    let input = open(input_path);
     let optimized_glb = optimize(input);
 
-    let mut output_path = path.to_path_buf();
-    let stem = output_path.file_stem().unwrap().to_str().unwrap();
-    output_path.set_file_name(format!("{}_squished.glb", stem));
-    std::fs::write(&output_path, optimized_glb).unwrap();
-    println!(
-        "Squished file: {}! Enjoy: ✨",
-        output_path.to_str().unwrap()
-    )
+    std::fs::write(output_path, optimized_glb).unwrap();
+
+    println!("Squished file: {}! Enjoy: ✨", output_path.display())
 }
 
 fn optimize(input: Input) -> Vec<u8> {
@@ -470,7 +477,10 @@ mod tests {
     // }
     #[test]
     pub fn test_that_it_works_with_glb() {
-        squish("test_data/BoxTexturedBinary.glb");
+        squish(
+            "test_data/BoxTexturedBinary.glb",
+            "test_data/BoxTexturedBinary_squished.glb",
+        );
         verify("test_data/BoxTexturedBinary_squished.glb");
     }
 
