@@ -43,10 +43,7 @@ enum TextureType {
 
 impl TextureType {
     pub fn is_srgb(&self) -> bool {
-        match self {
-            TextureType::BaseColor | TextureType::Emissive => true,
-            _ => false,
-        }
+        matches!(self, TextureType::BaseColor | TextureType::Emissive)
     }
 
     pub fn block_size(&self) -> &'static str {
@@ -68,7 +65,7 @@ pub fn squish<P: AsRef<Path>>(file_name: P) {
     let mut output_path = path.to_path_buf();
     let stem = output_path.file_stem().unwrap().to_str().unwrap();
     output_path.set_file_name(format!("{}_squished.glb", stem));
-    std::fs::write(&output_path, &optimized_glb).unwrap();
+    std::fs::write(&output_path, optimized_glb).unwrap();
     println!(
         "Squished file: {}! Enjoy: ✨",
         output_path.to_str().unwrap()
@@ -142,7 +139,7 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
 
         // Okay, this buffer view points to an image - we instead want to grab the bytes of the compressed image.
         let bytes = if let Some(image_index) = image_buffer_view_indices.get(&index) {
-            image_map.get(&image_index).unwrap()
+            image_map.get(image_index).unwrap()
         } else {
             // Not an image - just get the original data and return it as-is.
             let start = view.byte_offset.unwrap_or_default() as usize;
@@ -259,7 +256,7 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
         gltf::image::Source::View { view, mime_type } => {
             // Right. Bytes are BYTES.
             let bytes = &input.blob[view.offset()..view.offset() + view.length()];
-            let mut path = file_name(&bytes);
+            let mut path = file_name(bytes);
             let (extension, format) = if mime_type == "image/jpeg" {
                 ("jpg", image::ImageFormat::Jpeg)
             } else {
@@ -329,14 +326,14 @@ fn compress_image(input_path: &PathBuf, output_path: &mut PathBuf, texture_type:
     );
 
     if USE_TOKTX {
-        toktx(&input_path, &output_path, texture_type);
+        toktx(input_path, output_path, texture_type);
     } else {
         output_path.set_extension("ktx");
         // Right. Call astcenc
-        astc(input_path, &output_path, texture_type);
+        astc(input_path, output_path, texture_type);
 
         // Nice work. Now we need to take that ktx file and convert it to ktx2.
-        ktx2ktx2(&output_path);
+        ktx2ktx2(output_path);
 
         // OK. Hopefully that worked.
         output_path.set_extension("ktx2");
@@ -436,7 +433,7 @@ fn file_name(file_bytes: &[u8]) -> PathBuf {
 fn open(path: &Path) -> Input {
     let reader = std::fs::File::open(path)
         .unwrap_or_else(|e| panic!("Unable to open file {}: {}", path.display(), e));
-    match path.extension().map(|s| s.to_str()).flatten() {
+    match path.extension().and_then(|s| s.to_str()) {
         Some("gltf") => {
             todo!("gltf files are not currently supported, sorry!")
             // let gltf = gltf::Gltf::from_reader(reader).expect("Unable to open gltf file!");
