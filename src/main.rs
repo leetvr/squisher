@@ -1,11 +1,12 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
-    mem,
+    io, mem,
     path::{Path, PathBuf},
     process::Command,
 };
 
+use anyhow::{bail, Context, Error};
 use clap::Parser;
 use gltf::json::{image::MimeType, Index};
 
@@ -34,7 +35,15 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    squish(&args.input, &args.output)
+    if let Err(err) = run(args) {
+        eprintln!("Fatal error: {err:?}");
+        std::process::exit(1);
+    }
+}
+
+fn run(args: Args) -> anyhow::Result<()> {
+    squish(&args.input, &args.output)?;
+    Ok(())
 }
 
 struct Input {
@@ -66,21 +75,23 @@ impl TextureType {
     }
 }
 
-pub fn squish<P: AsRef<Path>>(input_path: P, output_path: P) {
+pub fn squish<P: AsRef<Path>>(input_path: P, output_path: P) -> anyhow::Result<()> {
     let input_path = input_path.as_ref();
     let output_path = output_path.as_ref();
 
     println!("Squishing {}..", input_path.display());
-    let input = open(input_path);
-    let optimized_glb = optimize(input);
+    let input = open(input_path)?;
+    let optimized_glb = optimize(input)?;
 
-    std::fs::write(output_path, optimized_glb).unwrap();
+    fs_err::write(output_path, optimized_glb)?;
 
-    println!("Squished file: {}! Enjoy: ✨", output_path.display())
+    println!("Squished file: {}! Enjoy: ✨", output_path.display());
+    Ok(())
 }
 
-fn optimize(input: Input) -> Vec<u8> {
+fn optimize(input: Input) -> anyhow::Result<Vec<u8>> {
     let mut image_map: HashMap<usize, Vec<u8>> = Default::default();
+
     // First, compress the images.
     // In order to do this, we need to have a bit of information about them first:
     let document = &input.document;
@@ -89,33 +100,33 @@ fn optimize(input: Input) -> Vec<u8> {
         let pbr = material.pbr_metallic_roughness();
         if let Some(base_colour) = pbr.base_color_texture() {
             let texture = base_colour.texture();
-            let compressed = compress_texture(&texture, &input, TextureType::BaseColor);
+            let compressed = compress_texture(&texture, &input, TextureType::BaseColor)?;
             image_map.insert(texture.source().index(), compressed);
         }
 
         if let Some(metallic_roughness) = pbr.metallic_roughness_texture() {
             let texture = metallic_roughness.texture();
             let compressed =
-                compress_texture(&texture, &input, TextureType::MetallicRoughnessOcclusion);
+                compress_texture(&texture, &input, TextureType::MetallicRoughnessOcclusion)?;
             image_map.insert(texture.source().index(), compressed);
         }
 
         if let Some(normal) = material.normal_texture() {
             let texture = normal.texture();
-            let compressed = compress_texture(&texture, &input, TextureType::Normal);
+            let compressed = compress_texture(&texture, &input, TextureType::Normal)?;
             image_map.insert(texture.source().index(), compressed);
         }
 
         if let Some(emissive) = material.emissive_texture() {
             let texture = emissive.texture();
-            let compressed = compress_texture(&texture, &input, TextureType::Emissive);
+            let compressed = compress_texture(&texture, &input, TextureType::Emissive)?;
             image_map.insert(texture.source().index(), compressed);
         }
 
         if let Some(occlusion) = material.occlusion_texture() {
             let texture = occlusion.texture();
             let compressed =
-                compress_texture(&texture, &input, TextureType::MetallicRoughnessOcclusion);
+                compress_texture(&texture, &input, TextureType::MetallicRoughnessOcclusion)?;
             image_map.insert(texture.source().index(), compressed);
         }
     }
@@ -124,7 +135,7 @@ fn optimize(input: Input) -> Vec<u8> {
     create_glb_file(input, image_map)
 }
 
-fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> {
+fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> anyhow::Result<Vec<u8>> {
     // Ugh, this is going to be disgusting.
     let mut new_blob: Vec<u8> = Vec::new();
     let blob = &input.blob;
@@ -223,9 +234,10 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
 
     let new_blob = to_padded_byte_vector(new_blob);
     let buffer_length = new_blob.len() as u32;
-    let json_string = gltf::json::serialize::to_string(&new_root).expect("Serialization error");
+    let json_string = gltf::json::serialize::to_string(&new_root)?;
     let mut json_offset = json_string.len() as u32;
     align_to_multiple_of_four(&mut json_offset);
+
     let glb = gltf::binary::Glb {
         header: gltf::binary::Header {
             magic: *b"glTF",
@@ -237,7 +249,7 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> Vec<u8> 
     };
 
     // And we're done! Write the entire file to GLB.
-    glb.to_vec().unwrap()
+    Ok(glb.to_vec()?)
 }
 
 fn align_to_multiple_of_four(n: &mut u32) {
@@ -256,24 +268,31 @@ fn to_padded_byte_vector<T>(vec: Vec<T>) -> Vec<u8> {
     new_vec
 }
 
-fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: TextureType) -> Vec<u8> {
+fn compress_texture(
+    texture: &gltf::Texture,
+    input: &Input,
+    texture_type: TextureType,
+) -> anyhow::Result<Vec<u8>> {
     println!("[SQUISHER] Compressing {texture_type:?}..");
+
     // Okay. First thing we need to do is get the path of the texture. If the source is *inside* the GLB, we'll have to write it to disk first.
     let (input_path, _original_size) = match texture.source().source() {
         gltf::image::Source::View { view, mime_type } => {
             // Right. Bytes are BYTES.
             let bytes = &input.blob[view.offset()..view.offset() + view.length()];
             let mut path = file_name(bytes);
-            let (extension, format) = if mime_type == "image/jpeg" {
-                ("jpg", image::ImageFormat::Jpeg)
-            } else {
-                ("png", image::ImageFormat::Png)
+            let (extension, format) = match mime_type {
+                "image/jpeg" => ("jpg", image::ImageFormat::Jpeg),
+                "image/png" => ("png", image::ImageFormat::Png),
+                _ => bail!("unsupported image MIME Type {mime_type}"),
             };
 
             // Now that we've got said bytes, let's resize the image.
             let mut image = image::io::Reader::new(std::io::Cursor::new(bytes));
             image.set_format(format);
-            let mut image = image.decode().unwrap();
+            let mut image = image.decode()?;
+
+            // TODO: Configurable max size for images.
             if image.height() > MAX_SIZE {
                 println!(
                     "[SQUISHER] Image is too large! ({}x{}), resizing to {}x{}",
@@ -287,23 +306,21 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
 
             path.set_extension(extension);
 
-            image
-                .save_with_format(&path, format)
-                .unwrap_or_else(|e| panic!("Unable to write image to path {:?} - {:?}", path, e));
+            image.save_with_format(&path, format)?;
 
             (path, bytes.len())
         }
         gltf::image::Source::Uri { uri, .. } => {
             // Technically glTF supports images not stored on disk (eg. the interweb) so let's make sure it's a real path.
             let path = Path::new(uri);
-            assert!(
+            anyhow::ensure!(
                 path.exists(),
                 "Corrupted glTF file or unsupported URI path - {}",
                 uri
             );
-            let file = std::fs::read(path).unwrap();
+            let file = fs_err::read(path)?;
             let destination = file_name(&file);
-            std::fs::write(&destination, &file).unwrap();
+            fs_err::write(&destination, &file)?;
             (destination, file.len())
         }
     };
@@ -315,49 +332,63 @@ fn compress_texture(texture: &gltf::Texture, input: &Input, texture_type: Textur
     if output_path.exists() && USE_CACHE {
         println!("[SQUISHER] Returning pre-compressed file!");
     } else {
-        compress_image(&input_path, &mut output_path, texture_type);
+        compress_image(&input_path, &mut output_path, texture_type)?;
     }
 
     // Now slurp up the image:
-    let file = std::fs::read(&output_path).expect("Unable to read output file!");
+    let file = fs_err::read(&output_path)?;
     println!("[SQUISHER] Tempfile is at {output_path:?}");
 
-    file
+    Ok(file)
 }
 
-fn compress_image(input_path: &PathBuf, output_path: &mut PathBuf, texture_type: TextureType) {
-    let delete_result = std::fs::remove_file(&output_path);
-    println!(
-        "[SQUISHER] Deleting destination file, if it exists: {:?}",
-        delete_result
-    );
+fn compress_image(
+    input_path: &PathBuf,
+    output_path: &mut PathBuf,
+    texture_type: TextureType,
+) -> anyhow::Result<()> {
+    println!("[SQUISHER] Deleting destination file if it exists");
+    if let Err(err) = fs_err::remove_file(&output_path) {
+        if err.kind() != io::ErrorKind::NotFound {
+            let err = Error::new(err).context("failed to remove destination file");
+            return Err(err);
+        }
+    }
 
     if USE_TOKTX {
-        toktx(input_path, output_path, texture_type);
+        toktx(input_path, output_path, texture_type)?;
     } else {
         output_path.set_extension("ktx");
         // Right. Call astcenc
-        astc(input_path, output_path, texture_type);
+        astc(input_path, output_path, texture_type)?;
 
         // Nice work. Now we need to take that ktx file and convert it to ktx2.
-        ktx2ktx2(output_path);
+        ktx2ktx2(output_path)?;
 
         // OK. Hopefully that worked.
         output_path.set_extension("ktx2");
     }
+
+    Ok(())
 }
 
 #[allow(unused)]
-fn ktx2ktx2(output_path: &PathBuf) {
+fn ktx2ktx2(output_path: &PathBuf) -> anyhow::Result<()> {
     // This command produces no output when it works correctly.
     let _output = Command::new(BIN_KTX2KTX2)
         .arg(output_path)
         .output()
-        .expect("Error calling ktx2ktx2");
+        .context("Error calling ktx2ktx2")?;
+
+    Ok(())
 }
 
 #[allow(unused)]
-fn astc(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) {
+fn astc(
+    input_path: &PathBuf,
+    output_path: &PathBuf,
+    texture_type: TextureType,
+) -> anyhow::Result<()> {
     // TODO: don't hardcode the path
     let mut astc_command = Command::new(BIN_ASTCENC);
 
@@ -387,15 +418,22 @@ fn astc(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) 
         astc_command.get_args().collect::<Vec<_>>()
     );
 
-    let output = astc_command.output().unwrap();
+    let output = astc_command.output().context("failed to run astcenc")?;
     if output.status.success() {
-        println!("{}", String::from_utf8(output.stdout).unwrap());
+        println!("{}", String::from_utf8_lossy(&output.stdout));
     } else {
-        panic!("{}", String::from_utf8(output.stdout).unwrap());
+        // TODO: Should this be stderr?
+        bail!("{}", String::from_utf8_lossy(&output.stdout));
     }
+
+    Ok(())
 }
 
-fn toktx(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType) {
+fn toktx(
+    input_path: &PathBuf,
+    output_path: &PathBuf,
+    texture_type: TextureType,
+) -> anyhow::Result<()> {
     let mut command = Command::new(BIN_TOKTX);
     command.args(["--encode", "astc", "--astc_blk_d"]);
     command.arg(texture_type.block_size());
@@ -417,16 +455,18 @@ fn toktx(input_path: &PathBuf, output_path: &PathBuf, texture_type: TextureType)
         "[SQUISHER] Running toktx with args {:?}",
         command.get_args().collect::<Vec<_>>()
     );
-    let output = command.output().unwrap();
+    let output = command.output().context("failed to run toktx")?;
     if output.status.success() {
-        println!("{}", String::from_utf8(output.stdout).unwrap());
+        println!("{}", String::from_utf8_lossy(&output.stdout));
     } else {
         eprintln!(
             "[SQUISHER] Error running command with args {:?}",
             command.get_args().collect::<Vec<_>>()
         );
-        panic!("{}", String::from_utf8(output.stderr).unwrap());
+        bail!("{}", String::from_utf8_lossy(&output.stderr));
     }
+
+    Ok(())
 }
 
 // Create a temporary file. There's probably a better way to do this.
@@ -437,57 +477,54 @@ fn file_name(file_bytes: &[u8]) -> PathBuf {
     path
 }
 
-fn open(path: &Path) -> Input {
-    let reader = std::fs::File::open(path)
-        .unwrap_or_else(|e| panic!("Unable to open file {}: {}", path.display(), e));
+fn open(path: &Path) -> anyhow::Result<Input> {
+    let reader = fs_err::File::open(path)?;
+
     match path.extension().and_then(|s| s.to_str()) {
         Some("gltf") => {
-            todo!("gltf files are not currently supported, sorry!")
-            // let gltf = gltf::Gltf::from_reader(reader).expect("Unable to open gltf file!");
-            // let blob = gltf
-            //     .blob
-            //     .expect("Sorry, only glTF files with embedded binaries are supported");
-            // Input {
-            //     document: gltf.document,
-            //     blob,
-            // }
+            bail!("gltf files are not currently supported, sorry!");
         }
         Some("glb") => {
-            let glb = gltf::Glb::from_reader(reader).expect("Unable to open GLB file!");
-            let json = gltf::json::Root::from_slice(&glb.json).unwrap();
-            let document =
-                gltf::Document::from_json(json).expect("Invalid JSON section of GLB file");
-            let blob = glb.bin.expect("No data in GLB file").to_vec();
-            Input { document, blob }
+            let glb = gltf::Glb::from_reader(reader).context("unable to parse GLB file")?;
+            let json = gltf::json::Root::from_slice(&glb.json)?;
+            let document = gltf::Document::from_json(json).context("invalid JSON in GLB file")?;
+            let blob = glb.bin.context("no data in GLB file")?.into_owned();
+
+            Ok(Input { document, blob })
         }
-        _ => panic!(
-            "File does not have extension gltf or glb: {}",
-            path.display()
-        ),
+        _ => {
+            bail!(
+                "File does not have extension gltf or glb: {}",
+                path.display()
+            );
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     // pub fn test_that_it_works_with_gltf() {
     //     // TODO - make sure that we delete the output file first.
     //     squish("test_data/BoxTextured.gltf");
     //     verify("test_data/BoxTextured_squished.glb");
     // }
+
     #[test]
-    pub fn test_that_it_works_with_glb() {
+    fn test_that_it_works_with_glb() {
         squish(
             "test_data/BoxTexturedBinary.glb",
             "test_data/BoxTexturedBinary_squished.glb",
-        );
+        )
+        .unwrap();
         verify("test_data/BoxTexturedBinary_squished.glb");
     }
 
-    pub fn verify<P: AsRef<Path>>(p: P) {
+    fn verify<P: AsRef<Path>>(p: P) {
         let path = p.as_ref();
         assert!(path.exists());
-        let input = open(path);
+        let input = open(path).unwrap();
         for image in input.document.images() {
             match image.source() {
                 gltf::image::Source::View { view, .. } => {
