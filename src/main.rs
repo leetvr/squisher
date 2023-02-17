@@ -12,15 +12,10 @@ use gltf::json::{image::MimeType, Index};
 
 const MAX_SIZE: u32 = 4096;
 
-static BIN_ASTCENC: &str = "astcenc-avx2";
-static BIN_KTX2KTX2: &str = "ktx2ktx2";
 static BIN_TOKTX: &str = "toktx";
 
 /// Check for cached versions. Mark this as false if the compression algorithm changes in some way.
 const USE_CACHE: bool = true;
-
-// Use KTX's toktx tool
-const USE_TOKTX: bool = true;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -370,72 +365,7 @@ fn compress_image(
         }
     }
 
-    if USE_TOKTX {
-        toktx(input_path, output_path, texture_type)?;
-    } else {
-        output_path.set_extension("ktx");
-        // Right. Call astcenc
-        astc(input_path, output_path, texture_type)?;
-
-        // Nice work. Now we need to take that ktx file and convert it to ktx2.
-        ktx2ktx2(output_path)?;
-
-        // OK. Hopefully that worked.
-        output_path.set_extension("ktx2");
-    }
-
-    Ok(())
-}
-
-#[allow(unused)]
-fn ktx2ktx2(output_path: &Path) -> anyhow::Result<()> {
-    log::debug!("Running {BIN_KTX2KTX2} {}", output_path.display());
-
-    // This command produces no output when it works correctly.
-    let _output = Command::new(BIN_KTX2KTX2)
-        .arg(output_path)
-        .output()
-        .context("Error calling ktx2ktx2")?;
-
-    Ok(())
-}
-
-#[allow(unused)]
-fn astc(input_path: &Path, output_path: &Path, texture_type: TextureType) -> anyhow::Result<()> {
-    // TODO: don't hardcode the path
-    let mut astc_command = Command::new(BIN_ASTCENC);
-
-    // Some textures need to be stored as linear data, some should be sRGB. atsc_enc lets us specify that.
-    if texture_type.is_srgb() {
-        astc_command.arg("-cs")
-    } else {
-        astc_command.arg("-cl")
-    };
-
-    // Specify the input and output paths.
-    astc_command.arg(input_path).arg(output_path);
-
-    // Specify the block size
-    astc_command.arg(texture_type.block_size());
-
-    // Specify the quality
-    astc_command.arg("-verythorough");
-
-    // Add any additional arguments, if neccessary.
-    if texture_type == TextureType::Normal {
-        astc_command.arg("-normal");
-    }
-
-    log::debug!(
-        "Running {BIN_ASTCENC} with args {:?}",
-        astc_command.get_args().collect::<Vec<_>>()
-    );
-
-    let output = astc_command.output().context("failed to run astcenc")?;
-    if !output.status.success() {
-        // TODO: Should this be stderr?
-        bail!("{}", String::from_utf8_lossy(&output.stdout));
-    }
+    toktx(input_path, output_path, texture_type)?;
 
     Ok(())
 }
