@@ -9,24 +9,24 @@ If you want your assets to use optimised textures but don't want to pay the runt
 Because [hotham](https://github.com/leetvr/hotham) works best with compressed textures, and doing this stuff by hand is time consuming. It takes *literal minutes*. And we all know that [a watched pot never boils](https://www.youtube.com/watch?v=eTFBxp0VW9M).
 
 ## How?
+Install `squisher` with `cargo install`:
+
+```bash
+cargo install --git https://github.com/leetvr/squisher.git
+```
+
 Running `squisher` is easy:
 
 ````bash
-cargo run your_file.gltf
+squisher your_file.glb output.glb
 ````
 
-OR
-
-````bash
-cargo run your_file.glb
-````
-
-Which will produce `your_file_squished.glb`.
+Which will produce `output.glb`.
 
 ## Requirements
- > note: this part is currently a lie, paths to these tools is hardcoded
- 
-In addition to [Rust](https://rustup.rs/), you must have the following programs installed. Tell `squisher` where they are by setting the environment variables `ASTC_PATH` and `KTX2KTK2_PATH` respectively:
+To compile `squisher`, you need:
+- [Rust](https://rustup.rs/) 1.67.1 or newer
 
-- arm's [astc-encoder](https://github.com/ARM-software/astc-encoder)
-- Khronos' [ktx2ktxt2](https://github.khronos.org/KTX-Software/ktxtools/ktx2ktx2.html)
+To run `squisher` you must have the following programs available on your system PATH:
+- [ARM astc-encoder](https://github.com/ARM-software/astc-encoder) 4.0.0 or newer
+- [Khronos Texture Tools](https://github.khronos.org/KTX-Software/ktxtools) 4.1.0 or newer
