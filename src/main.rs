@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
-    io, mem,
+    io,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -232,7 +232,7 @@ fn create_glb_file(input: Input, image_map: HashMap<usize, Vec<u8>>) -> anyhow::
     // and.. that's it? Maybe? Hopefully.
     // This part is mostly lifted from https://github.com/gltf-rs/gltf/blob/master/examples/export/main.rs
 
-    let new_blob = to_padded_byte_vector(new_blob);
+    pad_byte_vector(&mut new_blob);
     let buffer_length = new_blob.len() as u32;
     let json_string = gltf::json::serialize::to_string(&new_root)?;
     let mut json_offset = json_string.len() as u32;
@@ -256,16 +256,11 @@ fn align_to_multiple_of_four(n: &mut u32) {
     *n = (*n + 3) & !3;
 }
 
-fn to_padded_byte_vector<T>(vec: Vec<T>) -> Vec<u8> {
-    let byte_length = vec.len() * mem::size_of::<T>();
-    let byte_capacity = vec.capacity() * mem::size_of::<T>();
-    let alloc = vec.into_boxed_slice();
-    let ptr = Box::<[T]>::into_raw(alloc) as *mut u8;
-    let mut new_vec = unsafe { Vec::from_raw_parts(ptr, byte_length, byte_capacity) };
-    while new_vec.len() % 4 != 0 {
-        new_vec.push(0); // pad to multiple of four bytes
+/// Pads the length of a byte vector to a multiple of four bytes.
+fn pad_byte_vector(vec: &mut Vec<u8>) {
+    while vec.len() % 4 != 0 {
+        vec.push(0);
     }
-    new_vec
 }
 
 fn compress_texture(
@@ -288,7 +283,7 @@ fn compress_texture(
             };
 
             // Now that we've got said bytes, let's resize the image.
-            let mut image = image::io::Reader::new(std::io::Cursor::new(bytes));
+            let mut image = image::io::Reader::new(io::Cursor::new(bytes));
             image.set_format(format);
             let mut image = image.decode()?;
 
