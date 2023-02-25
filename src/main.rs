@@ -36,6 +36,10 @@ struct Args {
     /// Disable the image cache, forcing all images to be reprocessed.
     #[clap(long)]
     no_cache: bool,
+
+    /// Disable using Zstandard supercompression on the images.
+    #[clap(long)]
+    no_supercompression: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -68,6 +72,7 @@ fn main() {
 struct SquishContext {
     input: Input,
     use_cache: bool,
+    use_supercompression: bool,
     texture_format: TextureFormat,
 }
 
@@ -111,6 +116,7 @@ fn squish(args: Args) -> anyhow::Result<()> {
         input,
         use_cache,
         texture_format: args.format,
+        use_supercompression: !args.no_supercompression,
     };
 
     let optimized_glb = context.optimize()?;
@@ -198,7 +204,7 @@ impl SquishContext {
             gltf::image::Source::View { view, mime_type } => {
                 // Right. Bytes are BYTES.
                 let bytes = &self.input.blob[view.offset()..view.offset() + view.length()];
-                let mut path = file_name(self.texture_format, bytes);
+                let mut path = file_name(self.texture_format, self.use_supercompression, bytes);
                 let (extension, format) = match mime_type {
                     "image/jpeg" => ("jpg", image::ImageFormat::Jpeg),
                     "image/png" => ("png", image::ImageFormat::Png),
@@ -237,7 +243,7 @@ impl SquishContext {
                     uri
                 );
                 let bytes = fs_err::read(path)?;
-                let destination = file_name(self.texture_format, &bytes);
+                let destination = file_name(self.texture_format, self.use_supercompression, &bytes);
                 fs_err::write(&destination, &bytes)?;
                 (destination, bytes.len())
             }
@@ -255,6 +261,7 @@ impl SquishContext {
                 &mut output_path,
                 self.texture_format,
                 texture_type,
+                self.use_supercompression,
             )?;
         }
 
@@ -399,6 +406,7 @@ fn compress_image(
     output_path: &mut PathBuf,
     texture_format: TextureFormat,
     texture_type: TextureType,
+    supercompress: bool,
 ) -> anyhow::Result<()> {
     log::debug!("Deleting destination file if it exists");
 
@@ -409,7 +417,13 @@ fn compress_image(
         }
     }
 
-    toktx(input_path, output_path, texture_format, texture_type)?;
+    toktx(
+        input_path,
+        output_path,
+        texture_format,
+        texture_type,
+        supercompress,
+    )?;
 
     Ok(())
 }
@@ -419,12 +433,18 @@ fn toktx(
     output_path: &Path,
     format: TextureFormat,
     texture_type: TextureType,
+    supercompress: bool,
 ) -> anyhow::Result<()> {
     let mut command = Command::new(BIN_TOKTX);
     command.args([
         "--t2",        // Use KTX2 instead of KTX.
         "--genmipmap", // Generate mipmaps.
     ]);
+
+    if supercompress {
+        // Compress with Zstandard, quality 20.
+        command.args(["--zcmp", "20"]);
+    }
 
     match format {
         TextureFormat::Rgba8 => {
@@ -467,9 +487,10 @@ fn toktx(
 }
 
 // Create a temporary file. There's probably a better way to do this.
-fn file_name(format: TextureFormat, file_bytes: &[u8]) -> PathBuf {
+fn file_name(format: TextureFormat, supercompress: bool, file_bytes: &[u8]) -> PathBuf {
     let mut hasher = seahash::SeaHasher::new();
     hasher.write_u8(format as _);
+    hasher.write_u8(supercompress as _);
     hasher.write(file_bytes);
     let hash = hasher.finish();
 
@@ -514,6 +535,7 @@ mod tests {
             format: TextureFormat::Astc,
             verbose: true,
             no_cache: true,
+            no_supercompression: false,
         };
 
         let verification = VerifyArgs {
@@ -535,6 +557,7 @@ mod tests {
             format: TextureFormat::Rgba8,
             verbose: true,
             no_cache: true,
+            no_supercompression: false,
         };
 
         let verification = VerifyArgs {
