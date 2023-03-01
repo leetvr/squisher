@@ -144,6 +144,9 @@ fn configure_logging(verbose: bool) {
 
 impl SquishContext {
     fn optimize(self) -> anyhow::Result<Vec<u8>> {
+        // Ensure our cache directory exists and is ready to use
+        fs_err::create_dir_all(cache_dir()).context("failed to create cache directory")?;
+
         let mut image_map: HashMap<usize, Vec<u8>> = Default::default();
 
         // First, compress the images.
@@ -486,6 +489,12 @@ fn toktx(
     Ok(())
 }
 
+fn cache_dir() -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push("squisher-cache");
+    path
+}
+
 // Create a temporary file. There's probably a better way to do this.
 fn file_name(format: TextureFormat, supercompress: bool, file_bytes: &[u8]) -> PathBuf {
     let mut hasher = seahash::SeaHasher::new();
@@ -494,8 +503,12 @@ fn file_name(format: TextureFormat, supercompress: bool, file_bytes: &[u8]) -> P
     hasher.write(file_bytes);
     let hash = hasher.finish();
 
-    let mut path = std::env::temp_dir();
-    path.set_file_name(format!("squisher_temp_{}", hash));
+    // Format the file as 16 hexadecimal digits so that all files have a name
+    // with the same length.
+    let file_name = format!("{:016X}", hash);
+
+    let mut path = cache_dir();
+    path.push(file_name);
     path
 }
 
