@@ -157,34 +157,41 @@ impl SquishContext {
             let pbr = material.pbr_metallic_roughness();
             if let Some(base_colour) = pbr.base_color_texture() {
                 let texture = base_colour.texture();
-                let compressed = self.compress_texture(&texture, TextureType::BaseColor)?;
-                image_map.insert(texture.source().index(), compressed);
+                if let Some(compressed) = self.compress_texture(&texture, TextureType::BaseColor)? {
+                    image_map.insert(texture.source().index(), compressed);
+                }
             }
 
             if let Some(metallic_roughness) = pbr.metallic_roughness_texture() {
                 let texture = metallic_roughness.texture();
-                let compressed =
-                    self.compress_texture(&texture, TextureType::MetallicRoughnessOcclusion)?;
-                image_map.insert(texture.source().index(), compressed);
+                if let Some(compressed) =
+                    self.compress_texture(&texture, TextureType::MetallicRoughnessOcclusion)?
+                {
+                    image_map.insert(texture.source().index(), compressed);
+                }
             }
 
             if let Some(normal) = material.normal_texture() {
                 let texture = normal.texture();
-                let compressed = self.compress_texture(&texture, TextureType::Normal)?;
-                image_map.insert(texture.source().index(), compressed);
+                if let Some(compressed) = self.compress_texture(&texture, TextureType::Normal)? {
+                    image_map.insert(texture.source().index(), compressed);
+                }
             }
 
             if let Some(emissive) = material.emissive_texture() {
                 let texture = emissive.texture();
-                let compressed = self.compress_texture(&texture, TextureType::Emissive)?;
-                image_map.insert(texture.source().index(), compressed);
+                if let Some(compressed) = self.compress_texture(&texture, TextureType::Emissive)? {
+                    image_map.insert(texture.source().index(), compressed);
+                }
             }
 
             if let Some(occlusion) = material.occlusion_texture() {
                 let texture = occlusion.texture();
-                let compressed =
-                    self.compress_texture(&texture, TextureType::MetallicRoughnessOcclusion)?;
-                image_map.insert(texture.source().index(), compressed);
+                if let Some(compressed) =
+                    self.compress_texture(&texture, TextureType::MetallicRoughnessOcclusion)?
+                {
+                    image_map.insert(texture.source().index(), compressed);
+                }
             }
         }
 
@@ -196,7 +203,7 @@ impl SquishContext {
         &self,
         texture: &gltf::Texture,
         texture_type: TextureType,
-    ) -> anyhow::Result<Vec<u8>> {
+    ) -> anyhow::Result<Option<Vec<u8>>> {
         log::info!(
             "Compressing {texture_type:?} as format {:?}...",
             self.texture_format
@@ -211,6 +218,7 @@ impl SquishContext {
                 let (extension, format) = match mime_type {
                     "image/jpeg" => ("jpg", image::ImageFormat::Jpeg),
                     "image/png" => ("png", image::ImageFormat::Png),
+                    "image/ktx2" => return Ok(None),
                     _ => bail!("unsupported image MIME Type {mime_type}"),
                 };
 
@@ -272,7 +280,7 @@ impl SquishContext {
         let file = fs_err::read(&output_path)?;
         log::debug!("Tempfile is at {}", output_path.display());
 
-        Ok(file)
+        Ok(Some(file))
     }
 
     fn create_glb_file(self, image_map: HashMap<usize, Vec<u8>>) -> anyhow::Result<Vec<u8>> {
@@ -582,6 +590,37 @@ mod tests {
         fs_err::create_dir_all("test_output").unwrap();
         squish(args).unwrap();
         verify(verification);
+    }
+
+    #[test]
+    fn already_squished() {
+        let first_args = Args {
+            input: "test_data/BoxTexturedBinary.glb".into(),
+            output: "test_output/already_squished_1.glb".into(),
+            format: TextureFormat::Rgba8,
+            verbose: true,
+            no_cache: true,
+            no_supercompression: false,
+        };
+
+        squish(first_args).unwrap();
+
+        let second_args = Args {
+            input: "test_output/already_squished_1.glb".into(),
+            output: "test_output/already_squished_2glb".into(),
+            format: TextureFormat::Rgba8,
+            verbose: true,
+            no_cache: true,
+            no_supercompression: false,
+        };
+
+        squish(second_args).unwrap();
+
+        verify(VerifyArgs {
+            path: "test_output/already_squished_2.glb",
+            format: ktx2::Format::R8G8B8A8_SRGB,
+            mip_level_count: 9,
+        });
     }
 
     struct VerifyArgs {
