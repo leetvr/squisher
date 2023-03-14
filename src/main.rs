@@ -296,14 +296,16 @@ impl SquishContext {
             let new_offset = new_blob.len();
 
             // Okay, this buffer view points to an image - we instead want to grab the bytes of the compressed image.
-            let bytes = if let Some(image_index) = image_buffer_view_indices.get(&index) {
-                image_map.get(image_index).unwrap()
-            } else {
-                // Not an image - just get the original data and return it as-is.
-                let start = view.byte_offset.unwrap_or_default() as usize;
-                let end = start + view.byte_length as usize;
-                &blob[start..end]
-            };
+            let bytes = image_buffer_view_indices
+                .get(&index)
+                .and_then(|image_index| image_map.get(image_index))
+                .map(|data| data.as_slice())
+                .unwrap_or_else(|| {
+                    // Not an image - just get the original data and return it as-is.
+                    let start = view.byte_offset.unwrap_or_default() as usize;
+                    let end = start + view.byte_length as usize;
+                    &blob[start..end]
+                });
 
             // And write it into the new blob.
             new_blob.extend_from_slice(bytes);
