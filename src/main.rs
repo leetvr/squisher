@@ -295,13 +295,16 @@ impl SquishContext {
             // Stash the CURRENT length (eg before we add to it) of the new blob
             let new_offset = new_blob.len();
 
-            // Okay, this buffer view points to an image - we instead want to grab the bytes of the compressed image.
+            // Okay, this buffer view points to an image - we instead want to
+            // grab the bytes of the compressed image.
             let bytes = image_buffer_view_indices
                 .get(&index)
                 .and_then(|image_index| image_map.get(image_index))
                 .map(|data| data.as_slice())
                 .unwrap_or_else(|| {
-                    // Not an image - just get the original data and return it as-is.
+                    // This is either not an image or is an image that isn't
+                    // part of the material model we support — just get the
+                    // original data and return it as-is.
                     let start = view.byte_offset.unwrap_or_default() as usize;
                     let end = start + view.byte_length as usize;
                     &blob[start..end]
