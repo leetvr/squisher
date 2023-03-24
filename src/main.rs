@@ -210,19 +210,19 @@ impl SquishContext {
             self.texture_format
         );
 
-        let (mut bytes, format, extension) = match texture.source().source() {
+        let (mut bytes, format) = match texture.source().source() {
             gltf::image::Source::View { view, mime_type } => {
                 let slice = &self.input.blob[view.offset()..view.offset() + view.length()];
                 let bytes = Cow::Borrowed(slice);
 
-                let (extension, format) = match mime_type {
-                    "image/jpeg" => ("jpg", image::ImageFormat::Jpeg),
-                    "image/png" => ("png", image::ImageFormat::Png),
+                let format = match mime_type {
+                    "image/jpeg" => image::ImageFormat::Jpeg,
+                    "image/png" => image::ImageFormat::Png,
                     "image/ktx2" => return Ok(None),
                     _ => bail!("unsupported image MIME Type {mime_type}"),
                 };
 
-                (bytes, format, extension)
+                (bytes, format)
             }
             gltf::image::Source::Uri { uri, .. } => {
                 log::warn!("Skipping texture at URI {uri}");
@@ -280,7 +280,6 @@ impl SquishContext {
         // Pipe the bytes through toktx, giving us spiffy KTX2 image bytes.
         let output = toktx(
             &bytes,
-            &output_path.with_extension(extension),
             self.texture_format,
             texture_type,
             self.use_supercompression,
@@ -431,7 +430,6 @@ fn pad_byte_vector(vec: &mut Vec<u8>) {
 
 fn toktx(
     input_bytes: &[u8],
-    _input_path: &Path,
     format: TextureFormat,
     texture_type: TextureType,
     supercompress: bool,
