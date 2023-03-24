@@ -434,6 +434,8 @@ fn toktx(
     texture_type: TextureType,
     supercompress: bool,
 ) -> anyhow::Result<Vec<u8>> {
+    // Create a temporary file to put our image data into. Once `toktx` supports
+    // stdin inputs, we can remove this code.
     let dir = tempfile::tempdir()?;
     let input_path = dir.path().join("input");
     fs_err::write(&input_path, input_bytes).context("failed to write to temporary file")?;
@@ -513,7 +515,8 @@ fn cache_dir() -> PathBuf {
     path
 }
 
-// Create a temporary file. There's probably a better way to do this.
+// Generates a temporary file name suitable for writing a KTX2 file generated
+// from the given inputs.
 fn file_name(format: TextureFormat, supercompress: bool, file_bytes: &[u8]) -> PathBuf {
     let mut hasher = seahash::SeaHasher::new();
     hasher.write_u8(format as _);
