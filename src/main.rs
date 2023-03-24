@@ -242,27 +242,28 @@ impl SquishContext {
             return Ok(Some(file));
         }
 
-        // Now that we've got the image bytes, let's parse it to see if we need
-        // to resize it.
+        // Now that we've got the image bytes, let's parse its header to see if
+        // we need to resize it.
         let mut image = image::io::Reader::new(io::Cursor::new(&bytes));
         image.set_format(format);
-        let mut image = image.decode()?;
+        let (width, height) = image.into_dimensions()?;
 
-        // If the image is too big, we'll resize it and re-encode it before
-        // passing it onto `toktx`.
+        // If the image is too big, we'll decode it, resize it and re-encode it
+        // before passing it onto `toktx`.
         //
         // TODO: Configurable max size for images.
-        if image.height() > MAX_SIZE {
-            log::warn!(
-                "Image is too large! ({}x{}), resizing to {}x{}",
-                image.height(),
-                image.width(),
-                MAX_SIZE,
-                MAX_SIZE,
-            );
+        if height > MAX_SIZE {
+            log::warn!("Image is too large! ({width}x{height}), resizing to {MAX_SIZE}x{MAX_SIZE}");
+
+            // `into_dimensions` consumes the image reader, so we need to create
+            // a new one for resizing.
+            let mut image = image::io::Reader::new(io::Cursor::new(&bytes));
+            image.set_format(format);
+            let mut image = image.decode()?;
+
             image = image.resize(MAX_SIZE, MAX_SIZE, image::imageops::Lanczos3);
 
-            // Re-encode the image as PNG to avoid losing data.
+            // Re-encode the image as PNG to ensure a lossless input image.
             let mut output = Vec::new();
             let encoder = PngEncoder::new(&mut output);
             encoder
