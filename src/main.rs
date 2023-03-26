@@ -2,15 +2,16 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     hash::Hasher,
-    io,
+    io::{self, Write},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     str::FromStr,
 };
 
-use anyhow::{bail, Context, Error};
+use anyhow::{bail, Context};
 use clap::Parser;
 use gltf::json::{image::MimeType, Index};
+use image::{codecs::png::PngEncoder, ImageEncoder};
 
 const MAX_SIZE: u32 = 4096;
 
@@ -209,78 +210,88 @@ impl SquishContext {
             self.texture_format
         );
 
-        // Okay. First thing we need to do is get the path of the texture. If the source is *inside* the GLB, we'll have to write it to disk first.
-        let (input_path, _original_size) = match texture.source().source() {
+        let (mut bytes, format) = match texture.source().source() {
             gltf::image::Source::View { view, mime_type } => {
-                // Right. Bytes are BYTES.
-                let bytes = &self.input.blob[view.offset()..view.offset() + view.length()];
-                let mut path = file_name(self.texture_format, self.use_supercompression, bytes);
-                let (extension, format) = match mime_type {
-                    "image/jpeg" => ("jpg", image::ImageFormat::Jpeg),
-                    "image/png" => ("png", image::ImageFormat::Png),
+                let slice = &self.input.blob[view.offset()..view.offset() + view.length()];
+                let bytes = Cow::Borrowed(slice);
+
+                let format = match mime_type {
+                    "image/jpeg" => image::ImageFormat::Jpeg,
+                    "image/png" => image::ImageFormat::Png,
                     "image/ktx2" => return Ok(None),
                     _ => bail!("unsupported image MIME Type {mime_type}"),
                 };
 
-                // Now that we've got said bytes, let's resize the image.
-                let mut image = image::io::Reader::new(io::Cursor::new(bytes));
-                image.set_format(format);
-                let mut image = image.decode()?;
-
-                // TODO: Configurable max size for images.
-                if image.height() > MAX_SIZE {
-                    log::warn!(
-                        "Image is too large! ({}x{}), resizing to {}x{}",
-                        image.height(),
-                        image.width(),
-                        MAX_SIZE,
-                        MAX_SIZE,
-                    );
-                    image = image.resize(MAX_SIZE, MAX_SIZE, image::imageops::Lanczos3);
-                }
-
-                path.set_extension(extension);
-
-                image.save_with_format(&path, format)?;
-
-                (path, bytes.len())
+                (bytes, format)
             }
             gltf::image::Source::Uri { uri, .. } => {
-                // Technically glTF supports images not stored on disk (eg. the interweb) so let's make sure it's a real path.
-                let path = Path::new(uri);
-                anyhow::ensure!(
-                    path.exists(),
-                    "Corrupted glTF file or unsupported URI path - {}",
-                    uri
-                );
-                let bytes = fs_err::read(path)?;
-                let destination = file_name(self.texture_format, self.use_supercompression, &bytes);
-                fs_err::write(&destination, &bytes)?;
-                (destination, bytes.len())
+                log::warn!("Skipping texture at URI {uri}");
+                return Ok(None);
             }
         };
 
-        let mut output_path = input_path.clone();
-        output_path.set_extension("ktx2");
+        let output_path = file_name(self.texture_format, self.use_supercompression, &bytes);
 
-        // This file has already been hashed!
+        // If this file already exists, that means that we already hashed this
+        // image with the same configuration. We can just slurp it up and return
+        // here!
         if self.use_cache && output_path.exists() {
             log::info!("Returning pre-compressed file!");
-        } else {
-            compress_image(
-                &input_path,
-                &mut output_path,
-                self.texture_format,
-                texture_type,
-                self.use_supercompression,
-            )?;
+            let file = fs_err::read(&output_path)?;
+
+            return Ok(Some(file));
         }
 
-        // Now slurp up the image:
-        let file = fs_err::read(&output_path)?;
-        log::debug!("Tempfile is at {}", output_path.display());
+        // Now that we've got the image bytes, let's parse its header to see if
+        // we need to resize it.
+        let mut image = image::io::Reader::new(io::Cursor::new(&bytes));
+        image.set_format(format);
+        let (width, height) = image.into_dimensions()?;
 
-        Ok(Some(file))
+        // If the image is too big, we'll decode it, resize it and re-encode it
+        // before passing it onto `toktx`.
+        //
+        // TODO: Configurable max size for images.
+        if height > MAX_SIZE {
+            log::warn!("Image is too large! ({width}x{height}), resizing to {MAX_SIZE}x{MAX_SIZE}");
+
+            // `into_dimensions` consumes the image reader, so we need to create
+            // a new one for resizing.
+            let mut image = image::io::Reader::new(io::Cursor::new(&bytes));
+            image.set_format(format);
+            let mut image = image.decode()?;
+
+            image = image.resize(MAX_SIZE, MAX_SIZE, image::imageops::Lanczos3);
+
+            // Re-encode the image as PNG to ensure a lossless input image.
+            let mut output = Vec::new();
+            let encoder = PngEncoder::new(&mut output);
+            encoder
+                .write_image(
+                    image.as_bytes(),
+                    image.width(),
+                    image.height(),
+                    image.color(),
+                )
+                .unwrap();
+            bytes = Cow::Owned(output);
+        }
+
+        // Pipe the bytes through toktx, giving us spiffy KTX2 image bytes.
+        let output = toktx(
+            &bytes,
+            self.texture_format,
+            texture_type,
+            self.use_supercompression,
+        )
+        .context("failed to run toktx")?;
+
+        if self.use_cache {
+            fs_err::write(output_path, &output)
+                .context("failed to write converted image to cache")?;
+        }
+
+        Ok(Some(output))
     }
 
     fn create_glb_file(self, image_map: HashMap<usize, Vec<u8>>) -> anyhow::Result<Vec<u8>> {
@@ -417,40 +428,18 @@ fn pad_byte_vector(vec: &mut Vec<u8>) {
     }
 }
 
-fn compress_image(
-    input_path: &Path,
-    output_path: &mut PathBuf,
-    texture_format: TextureFormat,
-    texture_type: TextureType,
-    supercompress: bool,
-) -> anyhow::Result<()> {
-    log::debug!("Deleting destination file if it exists");
-
-    if let Err(err) = fs_err::remove_file(&output_path) {
-        if err.kind() != io::ErrorKind::NotFound {
-            let err = Error::new(err).context("failed to remove destination file");
-            return Err(err);
-        }
-    }
-
-    toktx(
-        input_path,
-        output_path,
-        texture_format,
-        texture_type,
-        supercompress,
-    )?;
-
-    Ok(())
-}
-
 fn toktx(
-    input_path: &Path,
-    output_path: &Path,
+    input_bytes: &[u8],
     format: TextureFormat,
     texture_type: TextureType,
     supercompress: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<u8>> {
+    // Create a temporary file to put our image data into. Once `toktx` supports
+    // stdin inputs, we can remove this code.
+    let dir = tempfile::tempdir()?;
+    let input_path = dir.path().join("input");
+    fs_err::write(&input_path, input_bytes).context("failed to write to temporary file")?;
+
     let mut command = Command::new(BIN_TOKTX);
     command.args([
         "--t2",        // Use KTX2 instead of KTX.
@@ -474,23 +463,41 @@ fn toktx(
     }
 
     if texture_type == TextureType::Normal {
+        // Generate a normalized normal map.
         command.args(["--normal_mode", "--normalize"]);
     }
 
+    // Embed the correct color space into the output.
     command.arg("--assign_oetf");
     if texture_type.is_srgb() {
         command.arg("srgb");
     } else {
         command.arg("linear");
     }
-    command.arg(output_path).arg(input_path);
+
+    // Write the result to stdout instead of to a file.
+    command.arg("-");
+
+    // Use our temporary file as the input.
+    command.arg(input_path);
 
     log::debug!(
         "Running {BIN_TOKTX} with args {:?}",
         command.get_args().collect::<Vec<_>>()
     );
 
-    let output = command.output().context("failed to run toktx")?;
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    // This unwrap is safe because we opted into piped stdin above.
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(input_bytes)?;
+
+    let output = child.wait_with_output()?;
+
     if !output.status.success() {
         log::error!(
             "Error running toktx with args {:?}",
@@ -499,7 +506,7 @@ fn toktx(
         bail!("{}", String::from_utf8_lossy(&output.stderr));
     }
 
-    Ok(())
+    Ok(output.stdout)
 }
 
 fn cache_dir() -> PathBuf {
@@ -508,7 +515,8 @@ fn cache_dir() -> PathBuf {
     path
 }
 
-// Create a temporary file. There's probably a better way to do this.
+// Generates a temporary file name suitable for writing a KTX2 file generated
+// from the given inputs.
 fn file_name(format: TextureFormat, supercompress: bool, file_bytes: &[u8]) -> PathBuf {
     let mut hasher = seahash::SeaHasher::new();
     hasher.write_u8(format as _);
@@ -612,7 +620,7 @@ mod tests {
 
         let second_args = Args {
             input: "test_output/already_squished_1.glb".into(),
-            output: "test_output/already_squished_2glb".into(),
+            output: "test_output/already_squished_2.glb".into(),
             format: TextureFormat::Rgba8,
             verbose: true,
             no_cache: true,
