@@ -14,7 +14,7 @@ anyhow = "1.0.69"
 clap = { version = "4.1.6", features = ["derive"] }
 env_logger = "0.10.0"
 fs-err = "2.9.0"
-gltf = { version = "1.0", features = ["KHR_lights_punctual"] }
+gltf = { version = "1.0", features = ["KHR_lights_punctual", "extras"] }
 image = "0.24"
 log = "0.4.17"
 seahash = "4.1.0"
